@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>مساعد الرسم الاحترافي بالكاميرا</title>
+<style>
+  :root{
+    --accent:#ff6b6b;
+    --accent-2:#5b8cff;
+    --panel-bg:rgba(8,8,10,0.94);
+    --btn-h:56px;
+    --small-btn:44px;
+    --panel-h:48vh;
+    --min-scale:0.25;
+    --max-scale:4;
+    --ui-gap:10px;
+    --glass: rgba(255,255,255,0.04);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;direction:rtl}
+  body{background:#000;color:#fff;overflow:hidden;-webkit-font-smoothing:antialiased}
+  #app{position:relative;width:100%;height:100%;touch-action:none}
+
+  /* كاميرا */
+  video#camera{
+    position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000;z-index:0;
+  }
+
+  /* حاوية الطبقات */
+  #layersContainer{position:absolute;inset:0;z-index:2;pointer-events:none}
+
+  /* كل طبقة صورة */
+  .layer{
+    position:absolute;left:50%;top:50%;
+    transform:translate(-50%,-50%) translate3d(0,0,0) scale(1) rotate(0deg);
+    max-width:85vw;max-height:80vh;touch-action:none;pointer-events:auto;
+    user-select:none;-webkit-user-drag:none;border-radius:8px;will-change:transform,filter,opacity;
+    box-shadow:0 10px 30px rgba(0,0,0,0.6);
+    background:transparent;
+  }
+
+  /* شريط علوي */
+  .topbar{
+    position:absolute;top:12px;left:12px;right:12px;display:flex;gap:8px;justify-content:flex-end;align-items:center;z-index:12;
+  }
+  .btn{
+    height:var(--btn-h);min-width:var(--btn-h);padding:8px;border-radius:12px;border:none;background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-size:16px;
+    box-shadow:0 8px 20px rgba(0,0,0,0.35);
+  }
+  .btn.ghost{background:var(--glass);color:#fff}
+  .btn.small{height:var(--small-btn);min-width:var(--small-btn);font-size:14px}
+  .icon-only{padding:0;width:48px;border-radius:10px}
+
+  /* لوحة الإعدادات المنزلقة */
+  .panel{
+    position:fixed;left:0;right:0;bottom:0;height:var(--panel-h);background:var(--panel-bg);
+    border-top-left-radius:16px;border-top-right-radius:16px;padding:12px;z-index:11;
+    transform:translateY(100%);transition:transform .32s cubic-bezier(.2,.9,.2,1);
+    display:flex;flex-direction:column;gap:12px;backdrop-filter:blur(8px);
+  }
+  .panel.open{transform:translateY(0)}
+  .grab{width:64px;height:6px;background:#222;border-radius:6px;margin:6px auto;opacity:.9}
+
+  .controls-row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+  .control{display:flex;flex-direction:column;gap:6px;align-items:center;flex:1;min-width:90px}
+  .control label{font-size:12px;color:#ddd}
+  input[type="range"]{width:100%}
+  input[type="color"]{width:44px;height:36px;border-radius:8px;border:none;padding:0}
+
+  /* قائمة الطبقات */
+  .layers-list{display:flex;gap:8px;overflow-x:auto;padding:6px 4px}
+  .layer-card{min-width:84px;background:linear-gradient(180deg,#0b0b0b,#0f0f10);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:6px;align-items:center;border:1px solid rgba(255,255,255,0.04)}
+  .layer-thumb{width:64px;height:48px;object-fit:cover;border-radius:6px;background:#222}
+  .layer-actions{display:flex;gap:6px}
+
+  /* محرر طبقة منبثق */
+  .editor{
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;background:#0b0b0c;padding:12px;border-radius:12px;display:none;
+    width:92%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.6)
+  }
+  .editor.open{display:block}
+  .editor .row{display:flex;gap:8px;margin-bottom:8px}
+  .editor label{font-size:13px;color:#ddd;margin-bottom:6px}
+
+  /* حفظ ومشاركة */
+  .save-btn{position:absolute;bottom:calc(var(--panel-h) + 14px);right:12px;z-index:13}
+  .hint{position:absolute;bottom:calc(var(--panel-h) + 14px);left:12px;z-index:11;background:rgba(0,0,0,0.5);padding:8px 10px;border-radius:10px;font-size:13px}
+
+  @media (max-width:520px){
+    :root{--btn-h:50px;--small-btn:40px}
+    .layer-card{min-width:72px}
+  }
+</style>
+</head>
+<body>
+  <div id="app" aria-live="polite">
+    <video id="camera" autoplay playsinline muted></video>
+
+    <div id="layersContainer"></div>
+
+    <div class="topbar" role="toolbar" aria-label="أدوات">
+      <button id="saveBtn" class="btn" title="حفظ ومشاركة">💾 حفظ</button>
+      <button id="shareBtn" class="btn ghost" title="مشاركة">📤 مشاركة</button>
+      <button id="addLayerBtn" class="btn ghost" title="إضافة طبقة">➕ طبقة</button>
+      <button id="toggleControls" class="btn ghost" title="الإعدادات">⚙️</button>
+      <button id="toggleCamera" class="btn ghost" title="تبديل الكاميرا">🔁</button>
+      <button id="chooseImage" class="btn small ghost" title="اختر صورة">🖼️</button>
+      <input id="fileInput" type="file" accept="image/*" style="display:none" />
+    </div>
+
+    <div class="hint" id="hint">اسحب الطبقة لتحريكها. إصبعين للتكبير/التدوير. اضغط حفظ لالتقاط الصورة.</div>
+
+    <section id="panel" class="panel" aria-hidden="true">
+      <div class="grab" aria-hidden="true"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700">تحكم الصورة والفلتر</div>
+        <div style="font-size:13px;color:#bbb">خيارات متقدمة</div>
+      </div>
+
+      <div class="layers-list" id="layersList" aria-live="polite"></div>
+
+      <div class="controls-row">
+        <div class="control"><label>الشفافية</label><input id="opacity" type="range" min="0" max="1" step="0.01" value="0.95"></div>
+        <div class="control"><label>السطوع</label><input id="brightness" type="range" min="0.4" max="2" step="0.01" value="1"></div>
+        <div class="control"><label>التباين</label><input id="contrast" type="range" min="0.4" max="2" step="0.01" value="1"></div>
+      </div>
+
+      <div class="controls-row">
+        <div class="control"><label>التشبع</label><input id="saturation" type="range" min="0" max="2" step="0.01" value="1"></div>
+        <div class="control"><label>درجة اللون (Hue)</label><input id="hue" type="range" min="0" max="360" step="1" value="0"></div>
+        <div class="control"><label>حدة (Sharpness)</label><input id="sharpness" type="range" min="0" max="5" step="0.1" value="0"></div>
+      </div>
+
+      <div class="controls-row">
+        <div class="control"><label>طمس (Blur)</label><input id="blur" type="range" min="0" max="10" step="0.5" value="0"></div>
+        <div class="control"><label>فلتر جاهز</label>
+          <select id="presetFilter" style="width:100%;padding:8px;border-radius:8px;border:none;background:#111;color:#fff">
+            <option value="none">بدون</option>
+            <option value="grayscale(1)">أبيض وأسود</option>
+            <option value="sepia(1)">سيبيا</option>
+            <option value="invert(1)">عكس</option>
+            <option value="contrast(1.2) saturate(1.2) hue-rotate(10deg)">HDR خفيف</option>
+            <option value="contrast(0.9) saturate(0.8) hue-rotate(-10deg)">Vintage</option>
+          </select>
+        </div>
+        <div class="control"><label>وضع المزج</label>
+          <select id="blendMode" style="width:100%;padding:8px;border-radius:8px;border:none;background:#111;color:#fff">
+            <option value="normal">عادي</option>
+            <option value="multiply">Multiply</option>
+            <option value="screen">Screen</option>
+            <option value="overlay">Overlay</option>
+            <option value="soft-light">Soft Light</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button id="removeBgBtn" class="btn ghost" style="flex:1">🧹 إزالة الخلفية (تجريبي)</button>
+        <button id="importJson" class="btn ghost" style="flex:1">📥 استيراد إعدادات</button>
+        <button id="exportJson" class="btn" style="flex:1">📤 تصدير إعدادات</button>
+      </div>
+    </section>
+
+    <div id="editor" class="editor" role="dialog" aria-hidden="true">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:700">محرر الطبقة</div>
+        <button id="closeEditor" class="btn small ghost">✖</button>
+      </div>
+      <div id="editorContent"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button id="applyEditor" class="btn" style="flex:1">تطبيق</button>
+        <button id="cancelEditor" class="btn ghost" style="flex:1">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ============================
+  إعداد الكاميرا (مع تبديل العدسة وإيقاف الستريم القديم)
+   ============================ */
+const video = document.getElementById('camera');
+let currentStream = null;
+let useFront = false;
+
+async function startCamera(){
+  try{
+    if (currentStream) currentStream.getTracks().forEach(t=>t.stop());
+    const constraints = { video: { facingMode: useFront ? 'user' : { exact: 'environment' }, width:{ideal:1280}, height:{ideal:720} }, audio:false };
+    try { currentStream = await navigator.mediaDevices.getUserMedia(constraints); }
+    catch(e){ currentStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode: useFront ? 'user' : 'environment' }, audio:false }); }
+    video.srcObject = currentStream;
+    video.style.transform = useFront ? 'scaleX(-1)' : 'scaleX(1)';
+  }catch(err){
+    console.error('كاميرا:', err);
+    alert('تعذر تشغيل الكاميرا. تأكد من أذونات المتصفح.');
+  }
+}
+startCamera();
+
+/* ============================
+  إدارة الطبقات: نموذج بيانات + DOM
+   ============================ */
+const layersContainer = document.getElementById('layersContainer');
+const layersList = document.getElementById('layersList');
+const fileInput = document.getElementById('fileInput');
+const chooseImage = document.getElementById('chooseImage');
+const addLayerBtn = document.getElementById('addLayerBtn');
+const toggleCameraBtn = document.getElementById('toggleCamera');
+const toggleControlsBtn = document.getElementById('toggleControls');
+const panel = document.getElementById('panel');
+const saveBtn = document.getElementById('saveBtn');
+const shareBtn = document.getElementById('shareBtn');
+const hint = document.getElementById('hint');
+const exportJsonBtn = document.getElementById('exportJson');
+const importJsonBtn = document.getElementById('importJson');
+const removeBgBtn = document.getElementById('removeBgBtn');
+
+let layers = []; // كل عنصر: {id, imgEl, x,y,scale,rotation,opacity,brightness,contrast,saturation,hue,blur,sharpness,blend,visible}
+let activeLayerId = null;
+
+/* مساعدة لإنشاء معرف */
+function uid(prefix='L'){ return prefix + Math.random().toString(36).slice(2,9); }
+
+/* إضافة طبقة من ملف */
+chooseImage.addEventListener('click', ()=> fileInput.click());
+fileInput.addEventListener('change', e=>{
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  createLayer(url);
+});
+
+/* زر إضافة طبقة */
+addLayerBtn.addEventListener('click', ()=> fileInput.click());
+
+/* تبديل الكاميرا */
+toggleCameraBtn.addEventListener('click', async ()=>{
+  useFront = !useFront;
+  await startCamera();
+});
+
+/* إظهار/إخفاء لوحة الإعدادات */
+toggleControlsBtn.addEventListener('click', ()=>{
+  const open = panel.classList.toggle('open');
+  panel.setAttribute('aria-hidden', !open);
+});
+
+/* إنشاء عنصر طبقة */
+function createLayer(src){
+  const id = uid();
+  const img = document.createElement('img');
+  img.src = src;
+  img.className = 'layer';
+  img.draggable = false;
+  img.dataset.layerId = id;
+  img.style.pointerEvents = 'auto';
+
+  const layer = {
+    id, imgEl: img,
+    x: 0, y: 0, scale: 1, rotation: 0,
+    opacity: 0.95, brightness: 1, contrast: 1, saturation: 1, hue: 0, blur: 0, sharpness: 0,
+    blend: 'normal', visible: true
+  };
+  layers.push(layer);
+  layersContainer.appendChild(img);
+  attachLayerPointerHandlers(layer);
+  img.onload = ()=> {
+    resetLayerTransform(layer, true);
+    renderLayer(layer);
+    refreshLayersList();
+  };
+}
+
+/* إضافة بطاقة مصغرة للطبقة في القائمة */
+function addLayerCard(layer){
+  const card = document.createElement('div');
+  card.className = 'layer-card';
+  card.id = 'card-' + layer.id;
+
+  const thumb = document.createElement('img');
+  thumb.className = 'layer-thumb';
+  thumb.src = layer.imgEl.src;
+  card.appendChild(thumb);
+
+  const actions = document.createElement('div');
+  actions.className = 'layer-actions';
+
+  const visBtn = document.createElement('button'); visBtn.className='btn small ghost'; visBtn.textContent='👁️';
+  visBtn.addEventListener('click', (e)=> { e.stopPropagation(); layer.visible = !layer.visible; layer.imgEl.style.display = layer.visible ? 'block' : 'none'; visBtn.style.opacity = layer.visible ? '1' : '0.4'; });
+
+  const upBtn = document.createElement('button'); upBtn.className='btn small ghost'; upBtn.textContent='⬆️';
+  upBtn.addEventListener('click', (e)=>{ e.stopPropagation(); moveLayerUp(layer.id); });
+
+  const downBtn = document.createElement('button'); downBtn.className='btn small ghost'; downBtn.textContent='⬇️';
+  downBtn.addEventListener('click', (e)=>{ e.stopPropagation(); moveLayerDown(layer.id); });
+
+  const editBtn = document.createElement('button'); editBtn.className='btn small'; editBtn.textContent='✏️';
+  editBtn.addEventListener('click', (e)=>{ e.stopPropagation(); openLayerEditor(layer.id); });
+
+  const delBtn = document.createElement('button'); delBtn.className='btn small ghost'; delBtn.textContent='🗑️';
+  delBtn.addEventListener('click', (e)=>{ e.stopPropagation(); removeLayer(layer.id); });
+
+  actions.appendChild(visBtn); actions.appendChild(upBtn); actions.appendChild(downBtn); actions.appendChild(editBtn); actions.appendChild(delBtn);
+  card.appendChild(actions);
+
+  card.addEventListener('click', ()=> {
+    activeLayerId = layer.id;
+    // تحميل قيم الطبقة إلى الواجهة العامة
+    loadLayerToPanel(layer);
+  });
+
+  // دعم سحب لإعادة ترتيب المصغرات (drag & drop)
+  card.draggable = true;
+  card.addEventListener('dragstart', (ev)=> {
+    ev.dataTransfer.setData('text/plain', layer.id);
+    card.style.opacity = '0.5';
+  });
+  card.addEventListener('dragend', ()=> card.style.opacity = '1');
+
+  card.addEventListener('dragover', (ev)=> ev.preventDefault());
+  card.addEventListener('drop', (ev)=> {
+    ev.preventDefault();
+    const draggedId = ev.dataTransfer.getData('text/plain');
+    if (!draggedId) return;
+    reorderLayersByDrop(draggedId, layer.id);
+  });
+
+  layersList.prepend(card);
+}
+
+/* إعادة ترتيب الطبقات */
+function reorderLayersByDrop(draggedId, targetId){
+  const from = layers.findIndex(l=>l.id===draggedId);
+  const to = layers.findIndex(l=>l.id===targetId);
+  if (from === -1 || to === -1 || from === to) return;
+  const [item] = layers.splice(from,1);
+  layers.splice(to,0,item);
+  reorderDOM();
+}
+function moveLayerUp(id){
+  const idx = layers.findIndex(l=>l.id===id);
+  if (idx < layers.length - 1){ const [it] = layers.splice(idx,1); layers.splice(idx+1,0,it); reorderDOM(); }
+}
+function moveLayerDown(id){
+  const idx = layers.findIndex(l=>l.id===id);
+  if (idx > 0){ const [it] = layers.splice(idx,1); layers.splice(idx-1,0,it); reorderDOM(); }
+}
+function reorderDOM(){
+  layersContainer.innerHTML = '';
+  layers.forEach(l => layersContainer.appendChild(l.imgEl));
+  layersList.innerHTML = '';
+  layers.slice().reverse().forEach(l => addLayerCardIfMissing(l));
+  refreshZ();
+}
+function addLayerCardIfMissing(layer){ if (!document.getElementById('card-'+layer.id)) addLayerCard(layer); }
+function refreshZ(){ layers.forEach((l,idx)=> l.imgEl.style.zIndex = 10 + idx); }
+
+/* حذف طبقة */
+function removeLayer(id){
+  const idx = layers.findIndex(l=>l.id===id);
+  if (idx === -1) return;
+  const layer = layers[idx];
+  layer.imgEl.remove();
+  layers.splice(idx,1);
+  const card = document.getElementById('card-' + id);
+  if (card) card.remove();
+}
+
+/* فتح محرر طبقة */
+const editor = document.getElementById('editor');
+const editorContent = document.getElementById('editorContent');
+let editingLayerId = null;
+function openLayerEditor(id){
+  const layer = layers.find(l=>l.id===id); if (!layer) return;
+  editingLayerId = id;
+  editorContent.innerHTML = '';
+  editorContent.innerHTML = `
+    <div class="row"><label>شفافية</label><input id="ed_opacity" type="range" min="0" max="1" step="0.01" value="${layer.opacity}"></div>
+    <div class="row"><label>سطوع</label><input id="ed_brightness" type="range" min="0.4" max="2" step="0.01" value="${layer.brightness}"></div>
+    <div class="row"><label>تباين</label><input id="ed_contrast" type="range" min="0.4" max="2" step="0.01" value="${layer.contrast}"></div>
+    <div class="row"><label>تشبع</label><input id="ed_saturation" type="range" min="0" max="2" step="0.01" value="${layer.saturation}"></div>
+    <div class="row"><label>درجة اللون</label><input id="ed_hue" type="range" min="0" max="360" step="1" value="${layer.hue}"></div>
+    <div class="row"><label>طمس</label><input id="ed_blur" type="range" min="0" max="10" step="0.5" value="${layer.blur}"></div>
+    <div class="row"><label>حدة</label><input id="ed_sharp" type="range" min="0" max="5" step="0.1" value="${layer.sharpness}"></div>
+    <div class="row"><label>وضع المزج</label>
+      <select id="ed_blend">
+        <option ${layer.blend==='normal'?'selected':''} value="normal">عادي</option>
+        <option ${layer.blend==='multiply'?'selected':''} value="multiply">Multiply</option>
+        <option ${layer.blend==='screen'?'selected':''} value="screen">Screen</option>
+        <option ${layer.blend==='overlay'?'selected':''} value="overlay">Overlay</option>
+        <option ${layer.blend==='soft-light'?'selected':''} value="soft-light">Soft Light</option>
+      </select>
+    </div>
+  `;
+  editor.classList.add('open');
+  editor.setAttribute('aria-hidden','false');
+}
+document.getElementById('closeEditor').addEventListener('click', ()=> { editor.classList.remove('open'); editor.setAttribute('aria-hidden','true'); });
+document.getElementById('cancelEditor').addEventListener('click', ()=> { editor.classList.remove('open'); editor.setAttribute('aria-hidden','true'); });
+
+document.getElementById('applyEditor').addEventListener('click', ()=>{
+  if (!editingLayerId) return;
+  const layer = layers.find(l=>l.id===editingLayerId);
+  if (!layer) return;
+  const get = id => document.getElementById(id).value;
+  layer.opacity = parseFloat(get('ed_opacity'));
+  layer.brightness = parseFloat(get('ed_brightness'));
+  layer.contrast = parseFloat(get('ed_contrast'));
+  layer.saturation = parseFloat(get('ed_saturation'));
+  layer.hue = parseFloat(get('ed_hue'));
+  layer.blur = parseFloat(get('ed_blur'));
+  layer.sharpness = parseFloat(get('ed_sharp'));
+  layer.blend = get('ed_blend');
+  renderLayer(layer);
+  editor.classList.remove('open'); editor.setAttribute('aria-hidden','true');
+});
+
+/* إعادة ضبط تحويل الطبقة */
+function resetLayerTransform(layer, centerOnly=false){
+  layer.x = 0; layer.y = 0; layer.scale = 1; layer.rotation = 0;
+  renderLayer(layer);
+}
+
+/* تطبيق الأنماط على عنصر الصورة */
+function renderLayer(layer){
+  const el = layer.imgEl;
+  el.style.display = layer.visible ? 'block' : 'none';
+  el.style.opacity = layer.opacity;
+  const fParts = [
+    `brightness(${layer.brightness})`,
+    `contrast(${layer.contrast})`,
+    `saturate(${layer.saturation})`,
+    `hue-rotate(${layer.hue}deg)`,
+    layer.blur ? `blur(${layer.blur}px)` : ''
+  ].filter(Boolean);
+  // إضافة فلتر الحدة كـ drop-shadow خفيف لتحسين المظهر
+  if (layer.sharpness > 0) fParts.push(`drop-shadow(0 0 ${Math.min(12, layer.sharpness*2)}px rgba(0,0,0,0.18))`);
+  el.style.filter = fParts.join(' ');
+  el.style.mixBlendMode = layer.blend || 'normal';
+  el.style.transform = `translate(-50%,-50%) translate3d(${layer.x}px, ${layer.y}px, 0) scale(${layer.scale}) rotate(${layer.rotation}deg)`;
+}
+
+/* ============================
+  تحكمات عامة في اللوحة (تطبق على الطبقة المحددة)
+   ============================ */
+const opacityInput = document.getElementById('opacity');
+const brightnessInput = document.getElementById('brightness');
+const contrastInput = document.getElementById('contrast');
+const saturationInput = document.getElementById('saturation');
+const hueInput = document.getElementById('hue');
+const sharpnessInput = document.getElementById('sharpness');
+const blurInput = document.getElementById('blur');
+const presetFilter = document.getElementById('presetFilter');
+const blendModeSelect = document.getElementById('blendMode');
+
+function getActiveLayer(){ return layers.find(l=>l.id===activeLayerId) || layers[layers.length-1]; }
+
+function loadLayerToPanel(layer){
+  if (!layer) return;
+  opacityInput.value = layer.opacity;
+  brightnessInput.value = layer.brightness;
+  contrastInput.value = layer.contrast;
+  saturationInput.value = layer.saturation;
+  hueInput.value = layer.hue;
+  sharpnessInput.value = layer.sharpness;
+  blurInput.value = layer.blur;
+  presetFilter.value = 'none';
+  blendModeSelect.value = layer.blend;
+}
+
+[opacityInput,brightnessInput,contrastInput,saturationInput,hueInput,sharpnessInput,blurInput,presetFilter,blendModeSelect].forEach(el=>{
+  el.addEventListener('input', ()=>{
+    const layer = getActiveLayer();
+    if (!layer) return;
+    layer.opacity = parseFloat(opacityInput.value);
+    layer.brightness = parseFloat(brightnessInput.value);
+    layer.contrast = parseFloat(contrastInput.value);
+    layer.saturation = parseFloat(saturationInput.value);
+    layer.hue = parseFloat(hueInput.value);
+    layer.sharpness = parseFloat(sharpnessInput.value);
+    layer.blur = parseFloat(blurInput.value);
+    layer.blend = blendModeSelect.value;
+    // تطبيق preset إذا اختير
+    if (presetFilter.value && presetFilter.value !== 'none'){
+      // نضيف preset كفلتر إضافي عبر دمج سلسلة الفلاتر
+      layer._preset = presetFilter.value;
+    } else {
+      layer._preset = null;
+    }
+    renderLayer(layer);
+  });
+});
+
+/* ============================
+  تحكم اللمس لكل طبقة: سحب، تكبير، تدوير (Pointer Events)
+   ============================ */
+function attachLayerPointerHandlers(layer){
+  const el = layer.imgEl;
+  el.addEventListener('pointerdown', onPointerDown);
+  el.addEventListener('pointermove', onPointerMove);
+  el.addEventListener('pointerup', onPointerUp);
+  el.addEventListener('pointercancel', onPointerUp);
+  el.addEventListener('lostpointercapture', onPointerUp);
+
+  function onPointerDown(e){
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    if (!layer._pointers) layer._pointers = new Map();
+    layer._pointers.set(e.pointerId, e);
+    layer._base = { x: layer.x, y: layer.y, scale: layer.scale, rotation: layer.rotation };
+    layer._last = { x: e.clientX, y: e.clientY };
+    // جلب الطبقة للأعلى
+    const idx = layers.findIndex(l=>l.id===layer.id);
+    if (idx !== layers.length - 1){
+      layers.splice(idx,1); layers.push(layer); reorderDOM();
+    }
+    activeLayerId = layer.id;
+  }
+  function onPointerMove(e){
+    if (!layer._pointers || !layer._pointers.has(e.pointerId)) return;
+    layer._pointers.set(e.pointerId, e);
+    const pts = Array.from(layer._pointers.values());
+    if (pts.length === 1){
+      const p = pts[0];
+      const dx = p.clientX - layer._last.x;
+      const dy = p.clientY - layer._last.y;
+      layer._last = { x: p.clientX, y: p.clientY };
+      layer.x += dx;
+      layer.y += dy;
+      renderLayer(layer);
+    } else if (pts.length >= 2){
+      const a = pts[0], b = pts[1];
+      const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      const angle = Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) * 180 / Math.PI;
+      if (!layer._startDist){
+        layer._startDist = dist;
+        layer._startAngle = angle;
+        layer._base.scale = layer.scale;
+        layer._base.rotation = layer.rotation;
+        layer._centroid = { x: (a.clientX + b.clientX)/2, y: (a.clientY + b.clientY)/2 };
+      }
+      let newScale = layer._base.scale * (dist / layer._startDist);
+      newScale = Math.max(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--min-scale')) || 0.25, Math.min(newScale, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--max-scale')) || 4));
+      layer.scale = newScale;
+      layer.rotation = layer._base.rotation + (angle - layer._startAngle);
+      renderLayer(layer);
+    }
+  }
+  function onPointerUp(e){
+    if (!layer._pointers) return;
+    layer._pointers.delete(e.pointerId);
+    if (layer._pointers.size < 2){
+      layer._startDist = null; layer._startAngle = null; layer._centroid = null;
+    }
+  }
+}
+
+/* ============================
+  إزالة الخلفية (تجريبي) — خياران:
+  1) خوارزمية chroma-key محلية (مناسبة لخلفيات متجانسة)
+  2) خيار استدعاء API خارجي (مطلوب مفتاح ومؤمن من جانب الخادم)
+   ============================ */
+removeBgBtn.addEventListener('click', async ()=>{
+  const layer = getActiveLayer();
+  if (!layer){ alert('اختر طبقة أولاً'); return; }
+  const method = confirm('هل تريد استخدام إزالة الخلفية المحلية (نعم) أم عبر خدمة خارجية (لا)؟\n\nنعم: خوارزمية بسيطة (خلفيات متجانسة)\nلا: يتطلب مفتاح API وخادم وسيط');
+  if (method){
+    const color = prompt('أدخل لون الخلفية لإزالته (مثال: #00ff00 أو rgb(255,255,255))','#00ff00');
+    if (!color) return;
+    const tol = parseInt(prompt('حساسية الإزالة (0-255) — قيمة أعلى تزيل نطاق أوسع','60')) || 60;
+    await chromaKeyRemove(layer, color, tol);
+    renderLayer(layer);
+    alert('تمت إزالة الخلفية (تجريبي). قد تحتاج لتنظيف إضافي.');
+  } else {
+    // استدعاء API خارجي: نعرض تعليمات للمطور
+    const proceed = confirm('ستحتاج إلى مفتاح API وخادم وسيط. اضغط موافق لعرض التعليمات (لن يتم إرسال أي بيانات الآن).');
+    if (!proceed) return;
+    alert('تعليمات: أضف نقطة نهاية على الخادم تستقبل ملف الصورة وتستدعي خدمة إزالة الخلفية (مثل remove.bg أو نموذج ML). أرسل الصورة كـ multipart/form-data وأعد URL الصورة المعالجة. ضع المفتاح في الخادم، لا في المتصفح.');
+  }
+});
+
+/* دالة إزالة الخلفية عبر canvas (chroma-key) */
+async function chromaKeyRemove(layer, keyColor, tolerance){
+  return new Promise((resolve)=>{
+    const img = layer.imgEl;
+    const canvas = document.createElement('canvas');
+    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    const imgData = ctx.getImageData(0,0,w,h);
+    const data = imgData.data;
+    // parse keyColor
+    let kr=0,kg=255,kb=0;
+    if (keyColor.startsWith('#')){
+      const hex = keyColor.replace('#','');
+      if (hex.length===3){
+        kr = parseInt(hex[0]+hex[0],16); kg = parseInt(hex[1]+hex[1],16); kb = parseInt(hex[2]+hex[2],16);
+      } else {
+        kr = parseInt(hex.slice(0,2),16); kg = parseInt(hex.slice(2,4),16); kb = parseInt(hex.slice(4,6),16);
+      }
+    } else if (keyColor.startsWith('rgb')){
+      const nums = keyColor.match(/\d+/g);
+      if (nums && nums.length>=3){ kr = +nums[0]; kg = +nums[1]; kb = +nums[2]; }
+    }
+    for (let i=0;i<data.length;i+=4){
+      const r=data[i], g=data[i+1], b=data[i+2];
+      const dist = Math.hypot(r-kr, g-kg, b-kb);
+      if (dist < tolerance){
+        data[i+3] = 0; // alpha = 0
+      }
+    }
+    ctx.putImageData(imgData,0,0);
+    const newUrl = canvas.toDataURL('image/png');
+    layer.imgEl.src = newUrl;
+    layer.imgEl.onload = ()=> resolve();
+  });
+}
+
+/* ============================
+  حفظ/تصدير الصورة النهائية (رسم الفيديو + الطبقات على canvas)
+   ============================ */
+saveBtn.addEventListener('click', async ()=>{
+  await exportCanvasImage();
+});
+
+shareBtn.addEventListener('click', async ()=>{
+  try{
+    const blob = await exportCanvasBlob();
+    if (navigator.canShare && navigator.canShare({files:[new File([blob],'drawing.png',{type:blob.type})]})){
+      await navigator.share({files:[new File([blob],'drawing.png',{type:blob.type})], title:'رسم الكاميرا', text:'تم حفظ الرسم من التطبيق'});
+    } else {
+      // تنزيل كنسخة احتياطية
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'camera-drawing.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  }catch(err){
+    console.error(err);
+    alert('المشاركة فشلت. تم تنزيل الصورة بدلاً من ذلك.');
+  }
+});
+
+async function exportCanvasBlob(){
+  const canvas = await buildExportCanvas();
+  return new Promise(resolve => canvas.toBlob(blob => resolve(blob), 'image/png'));
+}
+async function exportCanvasImage(){
+  const blob = await exportCanvasBlob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'camera-drawing.png';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/* بناء canvas للرسم النهائي */
+async function buildExportCanvas(){
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const w = video.videoWidth || vw;
+  const h = video.videoHeight || vh;
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  // رسم الفيديو
+  if (useFront){
+    ctx.save(); ctx.translate(w,0); ctx.scale(-1,1); ctx.drawImage(video, 0, 0, w, h); ctx.restore();
+  } else {
+    ctx.drawImage(video, 0, 0, w, h);
+  }
+
+  // رسم كل طبقة
+  for (let i=0;i<layers.length;i++){
+    const L = layers[i];
+    if (!L.visible) continue;
+    const img = L.imgEl;
+    const rect = img.getBoundingClientRect();
+    const cx = rect.left + rect.width/2;
+    const cy = rect.top + rect.height/2;
+    const sx = canvas.width / vw;
+    const sy = canvas.height / vh;
+    const drawX = cx * sx;
+    const drawY = cy * sy;
+    const drawW = rect.width * sx;
+    const drawH = rect.height * sy;
+
+    ctx.save();
+    ctx.globalAlpha = L.opacity;
+    try { ctx.globalCompositeOperation = L.blend || 'source-over'; } catch(e){ ctx.globalCompositeOperation = 'source-over'; }
+    ctx.translate(drawX, drawY);
+    ctx.rotate(L.rotation * Math.PI / 180);
+    ctx.scale(L.scale, L.scale);
+    // ملاحظة: فلتر السطوع/تباين/تشبع/هيو غير مدعوم مباشرة في canvas 2D؛ لتحسين الدقة يمكن استخدام WebGL أو معالجة بكسلية
+    ctx.drawImage(img, -drawW/2, -drawH/2, drawW, drawH);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  return canvas;
+}
+
+/* ============================
+  استيراد/تصدير إعدادات الطبقات (JSON)
+   ============================ */
+exportJsonBtn.addEventListener('click', ()=>{
+  const data = layers.map(l => ({
+    src: l.imgEl.src,
+    x: l.x, y: l.y, scale: l.scale, rotation: l.rotation,
+    opacity: l.opacity, brightness: l.brightness, contrast: l.contrast, saturation: l.saturation, hue: l.hue, blur: l.blur, sharpness: l.sharpness, blend: l.blend, visible: l.visible
+  }));
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'layers-settings.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+});
+
+importJsonBtn.addEventListener('click', ()=>{
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json';
+  input.onchange = e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try{
+        const data = JSON.parse(reader.result);
+        // مسح الطبقات الحالية
+        layers.forEach(l=> l.imgEl.remove());
+        layers = [];
+        layersList.innerHTML = '';
+        data.forEach(item => createLayerFromSettings(item));
+      }catch(err){
+        alert('ملف غير صالح');
+      }
+    };
+    reader.readAsText(f);
+  };
+  input.click();
+});
+
+function createLayerFromSettings(item){
+  createLayer(item.src);
+  // بعد التحميل نطبق الإعدادات
+  const layer = layers[layers.length-1];
+  layer.x = item.x || 0; layer.y = item.y || 0; layer.scale = item.scale || 1; layer.rotation = item.rotation || 0;
+  layer.opacity = item.opacity || 1; layer.brightness = item.brightness || 1; layer.contrast = item.contrast || 1;
+  layer.saturation = item.saturation || 1; layer.hue = item.hue || 0; layer.blur = item.blur || 0; layer.sharpness = item.sharpness || 0;
+  layer.blend = item.blend || 'normal'; layer.visible = item.visible !== false;
+  layer.imgEl.onload = ()=> { renderLayer(layer); refreshLayersList(); };
+}
+
+/* ============================
+  اختصارات واجهة وتجارب المستخدم
+   ============================ */
+// إخفاء التلميح بعد أول تفاعل
+['pointerdown','touchstart','click'].forEach(ev=>{
+  document.addEventListener(ev, ()=> { hint.style.display = 'none'; }, {once:true});
+});
+
+// إعادة ضبط سريع عند النقر المزدوج على الطبقة
+document.addEventListener('dblclick', (e)=>{
+  const target = e.target;
+  if (target && target.classList && target.classList.contains('layer')){
+    const id = target.dataset.layerId;
+    const layer = layers.find(l=>l.id===id);
+    if (layer) resetLayerTransform(layer, true);
+  }
+});
+
+/* ============================
+  وظائف مساعدة نهائية
+   ============================ */
+function refreshLayersList(){
+  layersList.innerHTML = '';
+  layers.slice().reverse().forEach(l => addLayerCardIfMissing(l));
+}
+function addLayerCardIfMissing(layer){
+  if (document.getElementById('card-'+layer.id)) return;
+  addLayerCard(layer);
+}
+function reorderDOM(){
+  layersContainer.innerHTML = '';
+  layers.forEach(l => layersContainer.appendChild(l.imgEl));
+  layersList.innerHTML = '';
+  layers.slice().reverse().forEach(l => addLayerCardIfMissing(l));
+  refreshZ();
+}
+function refreshZ(){ layers.forEach((l,idx)=> l.imgEl.style.zIndex = 10 + idx); }
+
+/* ============================
+  نهاية الملف - ملاحظات للمطور
+   ============================
+  - لتحسين جودة الفلاتر عند التصدير استخدم WebGL أو معالجة بكسلية على الـ canvas.
+  - لإزالة الخلفية بشكل احترافي استخدم خدمة خارجية أو نموذج ML (يُنصح بتنفيذ الاستدعاء من الخادم لحماية المفاتيح).
+  - يمكن إضافة حفظ تلقائي للمشروع في localStorage.
+  - الكود منظم بحيث يمكن توسيعه بسهولة: محرر طبقة متقدم، أدوات رسم، شبكات مساعدة، إلخ.
+   ============================ */
+</script>
+</body>
+</html>
